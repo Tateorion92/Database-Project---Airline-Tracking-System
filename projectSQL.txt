@@ -1,0 +1,163 @@
+Create Table Airlines(
+  acode VARCHAR(3) PRIMARY KEY,
+  name VARCHAR(300) Not Null,
+  website VARCHAR(300)
+  );
+
+Create Table Routes(
+  rnum Int Not Null,
+  acode VARCHAR(3),
+  planeModel VARCHAR(300) Not Null,
+  Primary Key(rnum, acode),
+  Foreign Key(acode) References Airlines(acode) On Delete Cascade
+  );
+  
+Create Table OutgoingRoutes(
+  rnum Int,
+  acode VARCHAR(3),
+  destination Varchar(300) Not Null,
+  outT Date Not Null,
+  Primary Key(rnum, acode),
+  Foreign Key(rnum, acode) References Routes(rnum, acode) On Delete Cascade
+  /*Foreign Key (acode) References Airlines (acode) On Delete Cascade*/
+  );
+  
+Create Table IncomingRoutes(
+  rnum Int,
+  acode VARCHAR(3),
+  source Varchar(300) Not Null,
+  incT Date Not Null,
+  Primary Key(rnum, acode),
+  Foreign Key(rnum, acode) References Routes(rnum, acode) On Delete Cascade
+  /*Foreign Key (acode) References Airlines (acode) On Delete Cascade*/
+  );
+  
+Create Table Gates(
+  gate Int Primary Key,
+  isfree Int
+  );  
+  
+Create Table Departures(
+  depID Int Primary Key,
+  depT Date Not Null,
+  rnum Int,
+  acode VARCHAR(3),
+  gate Int Not Null,
+  Foreign Key(gate) References Gates(gate),
+  Foreign Key(rnum, acode) References OutgoingRoutes(rnum, acode) On Delete Set Null
+  /*Foreign Key (acode) References Airlines (acode) On Delete Cascade*/
+  );
+  
+Create Table Arrivals(
+  arrID Int Primary Key,
+  arrT date Not Null,
+  rnum Int,
+  acode VARCHAR(3),
+  gate Int Not Null,
+  Foreign Key(gate) References Gates(gate),
+  Foreign Key(rnum, acode) References IncomingRoutes(rnum, acode) On Delete Set Null
+  /*Foreign Key (acode) References Airlines (acode) On Delete Cascade*/
+  );
+  
+Create Table Passengers(
+  pID Int Primary Key,
+  name Varchar(300) Not Null,
+  govID Int Not Null,
+  pob Varchar(300) Not Null,
+  dob date Not Null,
+  depID Int,
+  arrID Int,
+  Foreign Key(depID) References Departures(depID) On Delete Cascade,
+  Foreign Key(arrID) References Arrivals(arrID) On Delete Cascade,
+  Check(depID is Not Null Or arrID is Not Null)
+  );
+  
+Create Table Baggage(
+  bID Int Primary Key,
+  weight Int,
+  pID Int Not Null,
+  Foreign Key(pID) References Passengers(pID) On Delete Cascade
+  );
+
+/* 2.a.i */ 
+Create Or Replace View PassengersView AS;
+Select pID, name, govID, pob, dob, depID, arrID
+From Passengers
+Where depID Null Or arrID Null 
+  OR (arrID, depID) IN (Select * From ConnectingFlights)
+With Check Option;
+
+/* 2.a.ii */
+Create Or Replace View DeparturesView AS;
+Select *
+From Departures X
+Where Not Exists(
+  Select *
+  From Departures Y
+  Where (Y.gate = X.gate And 24*ABS((to_date(to_char(Y.depT,'hh24:mi'),'hh24:mi') - to_date(to_char(X.depT,'hh24:mi'),'hh24:mi'))) <=1)
+  Union
+  Select *
+  From Arrivals A
+  Where (A.gate = X.gate And 24*ABS((to_date(to_char(A.arrT,'hh24:mi'),'hh24:mi') - to_date(to_char(X.depT,'hh24:mi'),'hh24:mi'))) <=1)
+);
+With Check Option;
+
+Create Or Replace View ArrivalsView AS;
+Select *
+From Arrivals X
+Where Not Exists(
+  Select *
+  From Arrivals Y
+  Where (Y.gate = X.gate And 24*ABS((to_date(to_char(Y.arrT,'hh24:mi'),'hh24:mi') - to_date(to_char(X.arrT,'hh24:mi'),'hh24:mi'))) <=1)
+  Union
+  Select *
+  From Departures D
+  Where (D.gate = X.gate And 24*ABS((to_date(to_char(D.depT,'hh24:mi'),'hh24:mi') - to_date(to_char(X.arrT,'hh24:mi'),'hh24:mi'))) <=1)
+);
+With Check Option;
+
+/* 6.a */
+Create View ConnectingRoutes AS
+Select IncomingRoutes.rnum AS inNum, OutgoingRoutes.rnum AS outNum
+From IncomingRoutes , OutgoingRoutes
+Where ((outT-incT) <=1 And (outT-incT) >= 0) AND (24*((to_date(to_char(outT,'hh24:mi'),'hh24:mi') - to_date(to_char(incT,'hh24:mi'),'hh24:mi'))) <= 12 
+  And 24*((to_date(to_char(outT,'hh24:mi'),'hh24:mi') - to_date(to_char(incT,'hh24:mi'),'hh24:mi'))) >= 1
+  Or 24*((to_date(to_char(outT,'hh24:mi'),'hh24:mi') - to_date(to_char(incT,'hh24:mi'),'hh24:mi'))) <= -12);
+  
+Create View ConnectingFlights AS
+Select A.arrID, D.depID
+From Arrivals A, Departures D 
+Where (A.rnum, D.rnum) IN (Select * From ConnectingRoutes)
+  And ((depT-arrT) <=1 And (depT-arrT) >= 0) AND (24*((to_date(to_char(depT,'hh24:mi'),'hh24:mi') - to_date(to_char(arrT,'hh24:mi'),'hh24:mi'))) <= 12 
+  And 24*((to_date(to_char(depT,'hh24:mi'),'hh24:mi') - to_date(to_char(arrT,'hh24:mi'),'hh24:mi'))) >= 1
+  Or 24*((to_date(to_char(depT,'hh24:mi'),'hh24:mi') - to_date(to_char(arrT,'hh24:mi'),'hh24:mi'))) <= -12);
+  
+/* 6.b */
+Select P.*
+From Passengers P, Departures D
+Where (P.depID Is Not Null) And (P.depID = D.depID) And (depT-sysdate > 0);
+
+/* 6.c */
+Create Or Replace View FlightCount AS
+Select name, Count(arrID)+Count(depID) AS numFlights
+From Passengers
+Group by(name)
+Order By numFlights Desc;
+
+Select *
+From FlightCount
+Where rowNum<=3;
+
+/* 6.d */
+SELECT 'Victoria' AS source, destination, acode, COUNT(depID) AS numdelaysdep
+ FROM OutgoingRoutes Join Departures Using(rnum,acode)
+ WHERE to_date(to_char(depT,'hh24:mi'),'hh24:mi') - to_date(to_char(outT,'hh24:mi'),'hh24:mi') > 0
+ GROUP BY destination, acode
+ ORDER BY numdelaysdep Desc;
+ 
+SELECT 'Victoria' AS destination, source, acode, COUNT(arrID) AS numdelaysarr
+ FROM IncomingRoutes Join Arrivals Using(rnum,acode)
+ WHERE to_date(to_char(arrT,'hh24:mi'),'hh24:mi') - to_date(to_char(incT,'hh24:mi'),'hh24:mi') > 0
+ GROUP BY source, acode
+ ORDER BY numdelaysarr Desc;
+ 
